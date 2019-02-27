@@ -30,7 +30,14 @@
 
      }
      requestButtonPressed = () => {
-         Alert.alert("OTP has been sent to registered mobile number");
+         Alert.alert(
+           'OTP sent',
+           'Please check your registered mobile number',
+           [
+             {text: 'Ok', onPress: () => this.props.navigation.navigate("Register2")},
+           {cancelable: false},
+       ]
+         );
      }
    render() {
      return (
