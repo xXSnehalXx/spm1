@@ -30,14 +30,40 @@
 
      }
      requestButtonPressed = () => {
-         Alert.alert(
-           'OTP sent',
-           'Please check your registered mobile number',
-           [
-             {text: 'Ok', onPress: () => this.props.navigation.navigate("Register2")},
-           {cancelable: false},
-       ]
-         );
+         if((this.state.usnText != "") && (this.state.passText != "") && (this.state.rePassText != "")){
+             if(this.state.passText != this.state.rePassText)
+                {
+                    Alert.alert(
+                      'Enter same passwords',
+                      '',
+                      [
+                        {text: 'Ok'},
+                      {cancelable: false},
+                  ]
+                    );
+                    this.setState({passText:'' , rePassText:''})
+                }
+                else {
+                    Alert.alert(
+                      'OTP sent',
+                      'Please check your registered mobile number',
+                      [
+                        {text: 'Ok', onPress: () => this.props.navigation.navigate("Register2")},
+                      {cancelable: false},
+                  ]
+                    );
+                }
+         } else {
+             Alert.alert(
+               'Enter all details',
+               '',
+               [
+                 {text: 'Ok'},
+               {cancelable: false},
+           ]
+             );
+         }
+
      }
    render() {
      return (
@@ -62,6 +88,7 @@
                           placeholder="eg: helloduck"
                           onChangeText={(text) => this.setState({passText:text})}
                           value={this.state.passText}
+                          secureTextEntry = {true}
                         />
                     </View>
                  </View>
@@ -73,6 +100,7 @@
                           placeholder="eg: helloduck"
                           onChangeText={(text) => this.setState({rePassText:text})}
                           value={this.state.rePassText}
+                          secureTextEntry = {true}
                         />
                     </View>
                  </View>

@@ -32,6 +32,10 @@ class RegisterScreen1 extends Component {
     }
 }
 class RegisterScreen2 extends Component {
+    static navigationOptions = {
+       headerLeft: null,
+       gesturesEnabled: false,
+}
     render(){
         return (<RegView2 navigation = {this.props.navigation}/>);
     }

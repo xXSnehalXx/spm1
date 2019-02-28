@@ -54,7 +54,7 @@ class DetailsScreen extends React.Component {
   // };
   static navigationOptions = ({ navigation}) => {
     return {
-      headerTitle: <LogoTitle />,
+      // headerTitle: <LogoTitle />,
       headerRight: (
         <Button
           onPress={navigation.getParam('increaseCount')}
