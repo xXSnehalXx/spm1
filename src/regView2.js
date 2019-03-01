@@ -28,8 +28,14 @@
 
      }
      continueButtonPressed = () => {
-         Alert.alert("Your password has been set \n Login to continue");
-     }
+         Alert.alert(
+           'Successful!',
+           'Login to Continue',
+           [
+             {text: 'Ok', onPress: () => this.props.navigation.popToTop()},
+           {cancelable: false},
+        ]
+         );     }
    render() {
      return (
        <View style={styles.container}>

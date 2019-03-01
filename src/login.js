@@ -38,8 +38,9 @@ export default class Login extends Component {
     }
 
     loginButtonPressed = () => {
-        Alert.alert(`logtext = ${this.state.loginText} pass = ${this.state.passwordText}`);
+        Alert.alert("Login pressed");
     }
+
   render() {
     return (
       <View style={styles.container}>
@@ -84,7 +85,10 @@ export default class Login extends Component {
         </View>
         <View style={styles.b2}>
             <View style={styles.b2b}>
-                <Text style={styles.otherText}>Register</Text>
+                <TouchableHighlight onPress = {() => this.props.navigation.navigate("Register1")} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <Text style={styles.otherText}>Register</Text>
+                </TouchableHighlight>
+
             </View>
             <View style={styles.b2b}>
             <Text style={styles.otherText}>Forgot your password?</Text>
@@ -121,7 +125,7 @@ const styles = StyleSheet.create({
     },
     topText:{
         fontSize:26,
-        color:"#E6646E",
+        color:"#274690",
     },
     b1b2b:{
         margin:4,

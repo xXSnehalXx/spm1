@@ -10,7 +10,7 @@ import NavTabApp from './src/view2.js';
 import Login from './src/login.js';
 import RegView1 from './src/regView1.js';
 import RegView2 from './src/regView2.js';
-
+import SPM from './src/Navigation.js';
 import {name as appName} from './app.json';
 
-AppRegistry.registerComponent(appName, () => RegView2);
+AppRegistry.registerComponent(appName, () => SPM);

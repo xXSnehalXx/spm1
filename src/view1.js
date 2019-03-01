@@ -14,9 +14,9 @@ class HomeScreen extends React.Component {
     static navigationOptions = {
     title: 'Home',
     headerStyle: {
-      backgroundColor: '#f4511e',
+      backgroundColor: '#274690',
     },
-    headerTintColor: '#fff',
+    // headerTintColor: '#fff',
     headerTitleStyle: {
       fontWeight: 'bold',
     },
@@ -25,7 +25,6 @@ class HomeScreen extends React.Component {
         onPress={() => alert('This is a button!')}
         title="INFO"
         color={Platform.OS=="ios"?"#FFFFFF":"#f4511e"}
-
       />
     ),
   };
@@ -55,7 +54,7 @@ class DetailsScreen extends React.Component {
   // };
   static navigationOptions = ({ navigation}) => {
     return {
-      headerTitle: <LogoTitle />,
+      // headerTitle: <LogoTitle />,
       headerRight: (
         <Button
           onPress={navigation.getParam('increaseCount')}
