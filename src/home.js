@@ -16,27 +16,75 @@
    StatusBar,
    TextInput,
    TouchableHighlight,
-   Alert
+   Alert,
+   AsyncStorage
  } from 'react-native';
  export default class Home extends Component {
+     constructor(props){
+         super(props);
+         this.state = {
+             reading:"24452.23",
+             date:"",
+             sr:''
+         };
+
+        this.setData();
+
+         // this.getStoredData("@SavedReadingDate").then((goals) => {Alert.alert(goals)});
+         // this.getStoredData("@SavedReadingValue").then((goals) => {Alert.alert(goals)});
+     }
+
+     setData = () => {
+         AsyncStorage.getItem("@SavedReadingDate").then((value) => this.setState({date:value}));
+         AsyncStorage.getItem("@SavedReadingValue").then((value) => this.setState({sr:value}));
+     }
 
      saveButtonPressed = () => {
-         Alert.alert("Login pressed");
+         var today = new Date();
+         date=(today.getDate()<10?("0"+today.getDate()):today.getDate()) + "/"+ (parseInt(today.getMonth()+1)<10?("0"+parseInt(today.getMonth()+1)):parseInt(today.getMonth()+1)) +"/"+ today.getFullYear().toString().substr(-2);
+         time=`${today.getHours()<10?("0"+today.getHours()):today.getHours()}:${today.getMinutes()<10?("0"+today.getMinutes()):today.getMinutes()}`;
+         fullDate =`${date} ${time}`;
+
+         this.saveData(fullDate,this.state.reading);
+         this.setData();
      }
+
      billButtonPressed = () => {
          Alert.alert("bill pressed");
      }
+
      statisticsButtonPressed = () => {
          Alert.alert("statistics pressed");
      }
+
+     saveData = async (date,reading) => {
+          try {
+            await AsyncStorage.setItem('@SavedReadingDate',date);
+            await AsyncStorage.setItem('@SavedReadingValue',reading);
+          } catch (error) {
+            // Error saving data
+          }
+        };
+
    render() {
      return (
        <View style={styles.container}>
             <View style={[styles.b1,{marginTop:30}]}>
-                <ReadingBox/>
+                    <ReadingBox read = {this.state.reading}/>
             </View>
             <View style={styles.b1}>
-                <InfoBox/>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Last save on</Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: {this.state.date}</Text></View>
+            </View>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Reading </Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: {this.state.sr}</Text></View>
+            </View>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Units</Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 83.16</Text></View>
+            </View>
             </View>
             <View style={[styles.b1,{alignItems:'center'}]}>
                 <TouchableHighlight onPress = {this.saveButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
@@ -61,31 +109,20 @@
      );
    }
  }
-const InfoBox = () => {
-    return(
-      <View>
-          <View style={styles.infoBox}>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>Last save on</Text></View>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 23/02/19 15:34</Text></View>
-          </View>
-          <View style={styles.infoBox}>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>Reading </Text></View>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 23354.18</Text></View>
-          </View>
-          <View style={styles.infoBox}>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>Units</Text></View>
-              <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 83.16</Text></View>
-          </View>
-      </View>
-    );
-}
+// const InfoBox = (props) => {
+//     return(
+//       <View>
+//
+//       </View>
+//     );
+// }
 
-const ReadingBox = () => {
+const ReadingBox = (props) => {
     return(
       <View>
           <Text style={styles.liveText}>Live</Text>
           <View style={styles.liveReading}>
-              <Text style={styles.liveReadingNumber}>24454.23</Text>
+              <Text style={styles.liveReadingNumber}>{props.read}</Text>
               <Text style={styles.liveReadingKWH}>kwh</Text>
           </View>
       </View>
