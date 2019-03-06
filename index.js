@@ -14,4 +14,4 @@ import SPM from './src/Navigation.js';
 import Home from './src/home.js';
 import {name as appName} from './app.json';
 
-AppRegistry.registerComponent(appName, () => Home);
+AppRegistry.registerComponent(appName, () => SPM);

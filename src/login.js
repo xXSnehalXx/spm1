@@ -38,7 +38,7 @@ export default class Login extends Component {
     }
 
     loginButtonPressed = () => {
-        Alert.alert("Login pressed");
+        this.props.navigation.navigate("Home1");
     }
 
   render() {

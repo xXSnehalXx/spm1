@@ -23,30 +23,33 @@
      constructor(props){
          super(props);
          this.state = {
-             reading:"24452.23",
+             reading:"45777.32",
              date:"",
              sr:''
          };
 
-        this.setData();
+        this.getData();
 
          // this.getStoredData("@SavedReadingDate").then((goals) => {Alert.alert(goals)});
          // this.getStoredData("@SavedReadingValue").then((goals) => {Alert.alert(goals)});
      }
 
-     setData = () => {
+     getData = () => {
          AsyncStorage.getItem("@SavedReadingDate").then((value) => this.setState({date:value}));
          AsyncStorage.getItem("@SavedReadingValue").then((value) => this.setState({sr:value}));
      }
+     saveData = async (date,reading) => {
+            AsyncStorage.setItem('@SavedReadingDate',date).then(()=>this.getData());
+            AsyncStorage.setItem('@SavedReadingValue',reading).then(()=>this.getData());
+        };
 
      saveButtonPressed = () => {
          var today = new Date();
          date=(today.getDate()<10?("0"+today.getDate()):today.getDate()) + "/"+ (parseInt(today.getMonth()+1)<10?("0"+parseInt(today.getMonth()+1)):parseInt(today.getMonth()+1)) +"/"+ today.getFullYear().toString().substr(-2);
          time=`${today.getHours()<10?("0"+today.getHours()):today.getHours()}:${today.getMinutes()<10?("0"+today.getMinutes()):today.getMinutes()}`;
-         fullDate =`${date} ${time}`;
+         fullDate =date +" "+ time;
 
          this.saveData(fullDate,this.state.reading);
-         this.setData();
      }
 
      billButtonPressed = () => {
@@ -57,14 +60,7 @@
          Alert.alert("statistics pressed");
      }
 
-     saveData = async (date,reading) => {
-          try {
-            await AsyncStorage.setItem('@SavedReadingDate',date);
-            await AsyncStorage.setItem('@SavedReadingValue',reading);
-          } catch (error) {
-            // Error saving data
-          }
-        };
+
 
    render() {
      return (
