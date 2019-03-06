@@ -10,13 +10,13 @@ import Login from './login.js';
 import RegView1 from './regView1.js';
 import RegView2 from './regView2.js';
 import Home from './home.js';
+import Forgot from './forgot.js';
 import React , {Component} from "react";
 import { View, Text ,Button , Platform ,Image} from "react-native";
 import { createStackNavigator, createAppContainer } from "react-navigation";
 
 class LoginScreen extends Component {
     static navigationOptions = {
-    title: 'Login',
 }
     segueToRegister = () => {
         // this.props.navigation.navigate("Register1");
@@ -31,6 +31,12 @@ class LoginScreen extends Component {
 class RegisterScreen1 extends Component {
     render(){
         return (<RegView1 navigation = {this.props.navigation}/>);
+    }
+}
+
+class ForgotPassScreen extends Component {
+    render(){
+        return (<Forgot navigation = {this.props.navigation}/>);
     }
 }
 
@@ -75,7 +81,8 @@ const AppNavigator = createStackNavigator(
         Login : LoginScreen,
         Register1 : RegisterScreen1,
         Register2 : RegisterScreen2,
-        Home1:HomeScreen1
+        Home1:HomeScreen1,
+        Forgot:ForgotPassScreen
     },
     {
         initialRouteName : "Login",
