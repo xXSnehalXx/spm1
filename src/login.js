@@ -38,7 +38,7 @@ export default class Login extends Component {
     }
 
     loginButtonPressed = () => {
-        Alert.alert("Login pressed");
+        this.props.navigation.navigate("Home1");
     }
 
   render() {
@@ -91,7 +91,9 @@ export default class Login extends Component {
 
             </View>
             <View style={styles.b2b}>
-            <Text style={styles.otherText}>Forgot your password?</Text>
+                <TouchableHighlight onPress = {() => this.props.navigation.navigate("Forgot")} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <Text style={styles.otherText}>Forgot your password?</Text>
+                </TouchableHighlight>
             </View>
         </View>
       </View>
