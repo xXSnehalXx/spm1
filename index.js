@@ -13,6 +13,7 @@ import Forgot from './src/forgot.js';
 import RegView2 from './src/regView2.js';
 import SPM from './src/Navigation.js';
 import Home from './src/home.js';
+import NativeModuleTest from './src/nativeModuleTest.js'
 import {name as appName} from './app.json';
 
-AppRegistry.registerComponent(appName, () => SPM);
+AppRegistry.registerComponent(appName, () => NativeModuleTest);
