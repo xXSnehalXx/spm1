@@ -17,6 +17,7 @@ import {
   Alert
 } from 'react-native';
 import {NativeModules} from 'react-native';
+import ToastExample from './ToastExample';
 
 
 export default class NativeModuleTest extends Component {
@@ -44,10 +45,21 @@ export default class NativeModuleTest extends Component {
                 console.log(events);
               }
             });
+            console.log(CalendarManager.firstDayOfTheWeek);
         }
         else
         {
-            Alert.alert('hey android native modules yet to come ')
+            ToastExample.show('Oh it worked', ToastExample.SHORT);
+            ToastExample.measureLayout(
+              100,
+              100,
+              (msg) => {
+                console.log(msg);
+              },
+              (x, y, width, height) => {
+                console.log(x + ':' + y + ':' + width + ':' + height);
+              },
+            );
         }
     }
 
