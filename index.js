@@ -16,4 +16,4 @@ import Home from './src/home.js';
 import NativeModuleTest from './src/nativeModuleTest.js'
 import {name as appName} from './app.json';
 
-AppRegistry.registerComponent(appName, () => NativeModuleTest);
+AppRegistry.registerComponent(appName, () => SPM);
