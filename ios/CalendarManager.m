@@ -28,9 +28,9 @@ RCT_EXPORT_METHOD(addName:(NSString *)name addAge:(NSString *)age callback:(RCTR
   NSArray *events = @[name,age];
   callback(@[[NSNull null], events]);
 }
-- (NSDictionary *)constantsToExport
-{
-  return @{ @"firstDayOfTheWeek": @"Monday" };
-}
+//- (NSDictionary *)constantsToExport
+//{
+//  return @{ @"firstDayOfTheWeek": @"Monday" };
+//}
 @end
 
