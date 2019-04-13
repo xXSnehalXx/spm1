@@ -19,30 +19,41 @@
    Alert,
    AsyncStorage
  } from 'react-native';
+ import qs from 'qs';
+import axios from 'axios';
  export default class Home extends Component {
      constructor(props){
          super(props);
          this.state = {
-             reading:"45777.32",
+             reading:"",
              date:"",
-             sr:''
-         };
-
+             sr:'',
+             meter:123,
+             month:4,
+             units:"0"
+         }
         this.getData();
-
+       
          // this.getStoredData("@SavedReadingDate").then((goals) => {Alert.alert(goals)});
          // this.getStoredData("@SavedReadingValue").then((goals) => {Alert.alert(goals)});
      }
 
      getData = () => {
+        const bro = this;
          AsyncStorage.getItem("@SavedReadingDate").then((value) => this.setState({date:value}));
-         AsyncStorage.getItem("@SavedReadingValue").then((value) => this.setState({sr:value}));
+         AsyncStorage.getItem("@SavedReadingValue").then((value) => {
+             this.setState({sr:value});
+             setInterval(()=>bro.getLiveReading(bro.state.meter),2000);//Putting it here so that when units are calculated first time error wont come
+            });
      }
      saveData = async (date,reading) => {
             AsyncStorage.setItem('@SavedReadingDate',date).then(()=>this.getData());
-            AsyncStorage.setItem('@SavedReadingValue',reading).then(()=>this.getData());
+            AsyncStorage.setItem('@SavedReadingValue',reading).then(()=>{
+                this.getData();
+                this.setState({units:0})
+            });
         };
-
+    
      saveButtonPressed = () => {
          var today = new Date();
          date=(today.getDate()<10?("0"+today.getDate()):today.getDate()) + "/"+ (parseInt(today.getMonth()+1)<10?("0"+parseInt(today.getMonth()+1)):parseInt(today.getMonth()+1)) +"/"+ today.getFullYear().toString().substr(-2);
@@ -52,15 +63,70 @@
          this.saveData(fullDate,this.state.reading);
      }
 
-     billButtonPressed = () => {
-         Alert.alert("bill pressed");
-     }
-
      statisticsButtonPressed = () => {
          Alert.alert("statistics pressed");
      }
 
+     getLiveReading = () => {
+        const self = this;
+        const data = {
+            "meter":this.state.meter,
+        }
+        
+        const url = Platform.select({
+            ios:"http://localhost/rpi/getLiveReading.php",
+            android:"http://10.0.2.2/rpi/getLiveReading.php"
+          })
 
+        axios({
+          method: "POST",
+          url: url,
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          data: qs.stringify(data)
+        })
+          .then(function(response) {
+            console.log(response);
+            self.setState({
+                "reading":response.data.reading
+            })    
+            var oldUnits = parseInt(self.state.sr)
+            var newUnits = parseInt(response.data.reading)
+            var un = newUnits-oldUnits
+            self.setState({
+                units:un
+            });
+        })
+          .catch(function(error) {
+            console.log(error);
+          });
+      };
+      billButtonPressed = () => {
+        const self = this;
+        const data = {
+            "meter":this.state.meter,
+            "month":this.state.month
+        }
+        const url = Platform.select({
+            ios:"http://localhost/rpi/calculateTariff.php",
+            android:"http://10.0.2.2/rpi/calculateTariff.php"
+          })
+        axios({
+          method: "POST",
+          url: url,
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          data: qs.stringify(data)
+        })
+          .then(function(response) {
+            
+            var cost = "Rs "+response.data.cost
+            Alert.alert(cost);
+        })
+          .catch(function(error) {
+            console.log(error);
+            Alert.alert("Error")
+
+          });
+      };
 
    render() {
      return (
@@ -79,7 +145,7 @@
             </View>
             <View style={styles.infoBox}>
                 <View style={styles.infoBoxInside}><Text style={styles.infoText}>Units</Text></View>
-                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 83.16</Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: {this.state.units}</Text></View>
             </View>
             </View>
             <View style={[styles.b1,{alignItems:'center'}]}>

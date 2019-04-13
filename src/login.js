@@ -17,7 +17,8 @@ import {
   TouchableHighlight,
   Alert
 } from 'react-native';
-
+import qs from 'qs';
+import axios from 'axios';
 const instructions = Platform.select({
   ios: 'Press Cmd+R to reload,\n' +
     'Cmd+D or shake for dev menu',
@@ -26,20 +27,63 @@ const instructions = Platform.select({
 });
 
 export default class Login extends Component {
-    componentWillMount() {
- }
-    constructor(props){
+    
+      constructor(props){
         super(props);
+
         this.state = {
-            loginText:'',
-            passwordText:''
+            // loginText:'',
+            // passwordText:''
+            loginText:'9246',
+            passwordText:'snehal'
         }
+
+        //FOR AUTOMATIC LOGIN
+        this.loginButtonPressed();
+        //FOR AUTOMATIC LOGIN
+        
 
     }
 
     loginButtonPressed = () => {
-        this.props.navigation.navigate("Home1");
-    }
+        var pass = this.state.passwordText;
+        var username = this.state.loginText;
+        pass = pass.trim();
+        const self = this;
+        const data = {
+            "phone":username,
+            "pass":pass
+        }
+        const url = Platform.select({
+          ios:"http://localhost/rpi/login.php",
+          android:"http://10.0.2.2/rpi/login.php"
+        })
+        axios({
+          method: "POST",
+          url: url,
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          data: qs.stringify(data)
+        })
+          .then(function(response) {
+            console.log(response);
+            var data = response.data;
+            // Alert.alert(JSON.stringify(data))
+            if (data.secret == "XoReTu") {
+              self.props.navigation.navigate("Home1", {
+                meter:data.meter
+              });
+            } else {
+              Alert.alert("Unsuccessful");
+            }
+          })
+          .catch(function(error) {
+            console.log(error);
+          });
+      };
+
+    // loginButtonPressed = () => {
+    //     this.props.navigation.navigate("Home1");
+    // }
 
   render() {
     return (
