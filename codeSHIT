@@ -1,0 +1,1525 @@
+/* RASPBERRY PI CODE */
+
+#!/usr/bin/env python
+
+# TCS3200.py
+
+import time
+import threading
+
+import pigpio
+
+class sensor(threading.Thread):
+   """
+   This class reads RGB values from a TCS3200 colour sensor.
+
+   GND   Ground.
+   VDD   Supply Voltage (2.7-5.5V)
+   /OE   Output enable, active low. When OE is high OUT is disabled
+         allowing multiple sensors to share the same OUT line.
+   OUT   Output frequency square wave.
+   S0/S1 Output frequency scale selection.
+   S2/S3 Colour filter selection.
+
+   OUT is a square wave whose frequency is proprtional to the
+   intensity of the selected filter colour.
+
+   S2/S3 selects between red, green, blue, and no filter.
+
+   S0/S1 scales the frequency at 100%, 20%, 2% or off.
+
+   To take a reading the colour filters are selected in turn for a
+   fraction of a second and the frequency is read and converted to
+   Hz.  
+   """
+   def __init__(self, pi, OUT, S2, S3, S0=None, S1=None, OE=None):
+      """
+      The gpios connected to the sensor OUT, S2, and S3 pins must
+      be specified.  The S0, S1 (frequency) and OE (output enable)
+      gpios are optional.
+      """
+      threading.Thread.__init__(self)
+      self._pi = pi
+
+      self._OUT = OUT
+      self._S2 = S2
+      self._S3 = S3
+
+      self._mode_OUT = pi.get_mode(OUT)
+      self._mode_S2 = pi.get_mode(S2)
+      self._mode_S3 = pi.get_mode(S3)
+
+      pi.write(OUT, 0) # Disable frequency output.
+      pi.set_mode(S2, pigpio.OUTPUT)
+      pi.set_mode(S3, pigpio.OUTPUT)
+
+      self._S0 = S0
+      self._S1 = S1
+      self._OE = OE
+
+      if (S0 is not None) and (S1 is not None):
+         self._mode_S0 = pi.get_mode(S0)
+         self._mode_S1 = pi.get_mode(S1)
+         pi.set_mode(S0, pigpio.OUTPUT)
+         pi.set_mode(S1, pigpio.OUTPUT)
+
+      if OE is not None:
+         self._mode_OE = pi.get_mode(OE)
+         pi.set_mode(OE, pigpio.OUTPUT)
+         pi.write(OE, 0) # Enable device (active low).
+
+      self.set_sample_size(20)
+
+      self.set_update_interval(1.0) # One reading per second.
+
+      self.set_frequency(1) # 2%
+
+      self._set_filter(3) # Clear.
+
+      self._rgb_black = [0]*3
+      self._rgb_white = [10000]*3
+
+      self.hertz=[0]*3 # Latest triplet.
+      self._hertz=[0]*3 # Current values.
+
+      self.tally=[1]*3 # Latest triplet.
+      self._tally=[1]*3 # Current values.
+
+      self._delay=[0.1]*3 # Tune delay to get _samples pulses.
+
+      self._cycle = 0
+
+      self._cb_OUT = pi.callback(OUT, pigpio.RISING_EDGE, self._cbf)
+      self._cb_S2 = pi.callback(S2, pigpio.EITHER_EDGE, self._cbf)
+      self._cb_S3 = pi.callback(S3, pigpio.EITHER_EDGE, self._cbf)
+
+      self.daemon = True
+
+      self.start()
+
+   def cancel(self):
+      """
+      Cancel the sensor and release resources.
+      """
+      self._cb_S3.cancel()
+      self._cb_S2.cancel()
+      self._cb_OUT.cancel()
+
+      self.set_frequency(0) # off
+
+      self._set_filter(3) # Clear
+
+      self._pi.set_mode(self._OUT, self._mode_OUT)
+      self._pi.set_mode(self._S2, self._mode_S2)
+      self._pi.set_mode(self._S3, self._mode_S3)
+
+      if (self._S0 is not None) and (self._S1 is not None):
+         self._pi.set_mode(self._S0, self._mode_S0)
+         self._pi.set_mode(self._S1, self._mode_S1)
+
+      if self._OE is not None:
+         self._pi.write(self._OE, 1) # disable device
+         self._pi.set_mode(self._OE, self._mode_OE)
+
+   def get_rgb(self, top=255):
+      """
+      Get the latest RGB reading.
+
+      The raw colour hertz readings are converted to RGB values
+      as follows.
+
+      RGB = 255 * (Fv - Fb) / (Fw - Fb)
+
+      Where Fv is the sampled hertz, Fw is the calibrated
+      white hertz, and Fb is the calibrated black hertz.
+
+      By default the RGB values are constrained to be between
+      0 and 255.  A different upper limit can be set by using
+      the top parameter.
+      """
+      rgb = [0]*3
+      for c in range(3):
+         v = self.hertz[c] - self._rgb_black[c]
+         s = self._rgb_white[c] - self._rgb_black[c]
+         p = top * v / s
+         if p < 0:
+            p = 0
+         elif p > top:
+            p = top
+         rgb[c] = p
+      return rgb[:]
+
+   def get_hertz(self):
+      """
+      Get the latest hertz reading.
+      """
+      return self.hertz[:]
+
+   def set_black_level(self, rgb):
+      """
+      Set the black level calibration.
+      """
+      for i in range(3):
+         self._rgb_black[i] = rgb[i]
+
+   def get_black_level(self):
+      """
+      Get the black level calibration.
+      """
+      return self._rgb_black[:]
+
+   def set_white_level(self, rgb):
+      """
+      Set the white level calibration.
+      """
+      for i in range(3):
+         self._rgb_white[i] = rgb[i]
+
+   def get_white_level(self):
+      """
+      Get the white level calibration.
+      """
+      return self._rgb_white[:]
+
+   def set_frequency(self, f):
+      """
+      Set the frequency scaling.
+
+      f  S0  S1  Frequency scaling
+      0  L   L   Off
+      1  L   H   2%
+      2  H   L   20%
+      3  H   H   100%
+      """
+      if f == 0: # off
+         S0 = 0; S1 = 0
+      elif f == 1: # 2%
+         S0 = 0; S1 = 1
+      elif f == 2: # 20%
+         S0 = 1; S1 = 0
+      else: # 100%
+         S0 = 1; S1 = 1
+
+      if (self._S0 is not None) and (self._S1 is not None):
+         self._frequency = f
+         self._pi.write(self._S0, S0)
+         self._pi.write(self._S1, S1)
+      else:
+         self._frequency = None
+
+   def get_frequency(self):
+      """
+      Get the current frequency scaling.
+      """
+      return self._frequency
+
+   def set_update_interval(self, t):
+      """
+      Set the interval between RGB updates.
+      """
+      if (t >= 0.1) and (t < 2.0):
+         self._interval = t
+
+   def get_update_interval(self):
+      """
+      Get the interval between RGB updates.
+      """
+      return self._interval
+
+   def set_sample_size(self, samples):
+      """
+      Set the sample size (number of frequency cycles to accumulate).
+      """
+      if samples < 10:
+         samples = 10
+      elif samples > 100:
+         samples = 100
+
+      self._samples = samples
+
+   def get_sample_size(self):
+      """
+      Get the sample size.
+      """
+      return self._samples
+
+   def pause(self):
+      """
+      Pause reading (until a call to resume).
+      """
+      self._read = False
+
+   def resume(self):
+      """
+      Resume reading (after a call to pause).
+      """
+      self._read = True
+
+   def _set_filter(self, f):
+      """
+      Set the colour to be sampled.
+
+      f  S2  S3  Photodiode
+      0  L   L   Red
+      1  H   H   Green
+      2  L   H   Blue
+      3  H   L   Clear (no filter)
+      """
+      if f == 0: # Red
+         S2 = 0; S3 = 0
+      elif f == 1: # Green
+         S2 = 1; S3 = 1
+      elif f == 2: # Blue
+         S2 = 0; S3 = 1
+      else: # Clear
+         S2 = 1; S3 = 0
+
+      self._pi.write(self._S2, S2); self._pi.write(self._S3, S3)
+
+   def _cbf(self, g, l, t):
+
+      if g == self._OUT: # Frequency counter.
+         if self._cycle == 0:
+            self._start_tick = t
+         else:
+            self._last_tick = t
+         self._cycle += 1
+
+      else: # Must be transition between colour samples.
+         if g == self._S2:
+            if l == 0: # Clear -> Red.
+               self._cycle = 0
+               return
+            else:      # Blue -> Green.
+               colour = 2
+         else:
+            if l == 0: # Green -> Clear.
+               colour = 1
+            else:      # Red -> Blue.
+               colour = 0
+
+         if self._cycle > 1:
+            self._cycle -= 1
+            td = pigpio.tickDiff(self._start_tick, self._last_tick)
+            self._hertz[colour] = (1000000 * self._cycle) / td
+            self._tally[colour] = self._cycle
+         else:
+            self._hertz[colour] = 0
+            self._tally[colour] = 0
+
+         self._cycle = 0
+
+         # Have we a new set of RGB?
+         if colour == 1:
+            for i in range(3):
+               self.hertz[i] = self._hertz[i]
+               self.tally[i] = self._tally[i]
+
+   def run(self):
+      self._read = True
+      while True:
+         if self._read:
+
+            next_time = time.time() + self._interval
+
+            self._pi.set_mode(self._OUT, pigpio.INPUT) # Enable output gpio.
+
+            # The order Red -> Blue -> Green -> Clear is needed by the
+            # callback function so that each S2/S3 transition triggers
+            # a state change.  The order was chosen so that a single
+            # gpio changes state between each colour to be sampled.
+
+            self._set_filter(0) # Red
+            time.sleep(self._delay[0])
+
+            self._set_filter(2) # Blue
+            time.sleep(self._delay[2])
+
+            self._set_filter(1) # Green
+            time.sleep(self._delay[1])
+
+            self._pi.write(self._OUT, 0) # Disable output gpio.
+
+            self._set_filter(3) # Clear
+
+            delay = next_time - time.time()
+
+            if delay > 0.0:
+               time.sleep(delay)
+
+            # Tune the next set of delays to get reasonable results
+            # as quickly as possible.
+
+            for c in range(3):
+
+               # Calculate dly needed to get _samples pulses.
+
+               if self.hertz[c]:
+                  dly = self._samples / float(self.hertz[c])
+               else: # Didn't find any edges, increase sample time.
+                  dly = self._delay[c] + 0.1
+
+               # Constrain dly to reasonable values.
+
+               if dly < 0.001:
+                  dly = 0.001
+               elif dly > 0.5:
+                  dly = 0.5
+
+               self._delay[c] = dly
+
+         else:
+            time.sleep(0.1)
+
+if __name__ == "__main__":
+
+   import sys
+   import requests
+   import pigpio
+   import time
+   import TCS3200
+   
+   pulseLimit = 6
+   counter=0
+   RED=21
+   GREEN=20
+   BLUE=16
+
+   def wait_for_return(str):
+      if sys.hexversion < 0x03000000:
+         raw_input(str)
+      else:
+         input(str)
+   
+   def updateReading():
+      ts = str(time.time())
+      ar = ts.split('.')
+      r = requests.post('http://192.168.43.6/rpi/update.php',data={"meterno":123,"ts":ar[0]})
+
+
+   pi = pigpio.pi()
+
+   s = TCS3200.sensor(pi, 25, 23, 24, 15, 18, None)
+
+   s.set_frequency(3) 
+
+   interval = 0.2
+
+   s.set_update_interval(interval)
+   
+   wait_for_return("Calibrating black object, press RETURN to start")
+   for i in range(10):
+      time.sleep(interval)
+      hz = s.get_hertz()
+      print(hz)
+   s.set_black_level(hz)
+
+   wait_for_return("Calibrating white object, press RETURN to start")
+   for i in range(10):
+      time.sleep(interval)
+      hz = s.get_hertz()
+      print(hz)
+   s.set_white_level(hz)
+   
+   print("Close the box")
+   time.sleep(5);
+   print("START")
+   try:
+      while True:
+         rgb = s.get_rgb()
+
+         pi.set_PWM_dutycycle(RED, rgb[0])
+         pi.set_PWM_dutycycle(GREEN, rgb[1])
+         pi.set_PWM_dutycycle(BLUE, rgb[2])
+
+         # print(rgb, s.get_hertz(), s.tally)
+         if rgb[0]>50:
+            if counter == pulseLimit :
+               counter = 0
+               print("1 kWH increase")
+               updateReading()
+            else:
+               print("BLINK count = ",counter+1)
+               counter=counter+1
+         #print(rgb[0])
+         time.sleep(interval)
+
+   except:
+
+      print("cancelling")
+      s.cancel()
+      pi.stop()
+
+
+
+/* DATABASE SQL CODE*/
+
+-- phpMyAdmin SQL Dump
+-- version 4.8.4
+-- https://www.phpmyadmin.net/
+--
+-- Host: localhost
+-- Generation Time: Apr 09, 2019 at 10:28 AM
+-- Server version: 10.1.37-MariaDB
+-- PHP Version: 7.3.0
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+SET AUTOCOMMIT = 0;
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Database: `spm`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `details`
+--
+
+CREATE TABLE `details` (
+  `phone` int(10) NOT NULL,
+  `password` varchar(20) NOT NULL,
+  `meter` int(15) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Dumping data for table `details`
+--
+
+INSERT INTO `details` (`phone`, `password`, `meter`) VALUES
+(9246, 'snehal', 123);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `meterReading`
+--
+
+CREATE TABLE `meterReading` (
+  `meter` int(15) NOT NULL,
+  `time` int(50) NOT NULL,
+  `reading` int(40) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Dumping data for table `meterReading`
+--
+
+INSERT INTO `meterReading` (`meter`, `time`, `reading`) VALUES
+(123, 1554791497, 24000),
+(123, 1554791892, 24001),
+(123, 1554792235, 24002),
+(123, 1554793761, 24003),
+(123, 1554798069, 24004);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `tariff`
+--
+
+CREATE TABLE `tariff` (
+  `typeID` varchar(10) NOT NULL,
+  `fromUnit` int(10) NOT NULL,
+  `toUnit` int(10) NOT NULL,
+  `price` double NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Indexes for dumped tables
+--
+
+--
+-- Indexes for table `details`
+--
+ALTER TABLE `details`
+  ADD PRIMARY KEY (`phone`);
+COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+
+
+/* BACKEND API */
+
+//dbConfig.php
+<?php
+error_reporting(0);
+class Database
+{
+
+    private $host = "localhost";
+    private $db_name = "spm";
+    private $username = "snehal";
+    private $password = "snehal123";
+    public $conn;
+
+    public function dbConnection()
+	{
+
+	    $this->conn = null;
+        try
+		{
+            $this->conn = new PDO("mysql:host=" . $this->host . ";dbname=" . $this->db_name, $this->username, $this->password);
+			$this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        }
+		catch(PDOException $exception)
+		{
+            echo "Connection error: " . $exception->getMessage();
+        }
+
+        return $this->conn;
+    }
+}
+
+?>
+
+//operations.php
+<?php
+
+require_once 'dbConfig.php';
+
+class USER
+{
+private $conn;
+
+	public function __construct()
+	{
+		$database = new Database();
+		$db = $database->dbConnection();
+		$this->conn = $db;
+    }
+
+	public function runQuery($sql)
+	{
+			$stmt = $this->conn->prepare($sql);
+			return $stmt;
+	}
+    public function updateReading($ts , $meterno){
+        
+        $stmt = $this->runQuery("SELECT reading from meterReading WHERE meter = :meterno ORDER BY time DESC LIMIT 1");
+        $stmt->execute(array(":meterno"=>$meterno));
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $currentReading = $user['reading'];
+        $newReading = $currentReading + 1;
+
+        $s1 = $this->runQuery("INSERT INTO meterReading VALUES(:meterno,:ts,:newreading)");
+        $s1->execute(array(":meterno"=>$meterno,":ts"=>$ts,":newreading"=>$newReading));
+        // $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                //  return $user;
+    }
+    public function userLogin($phone,$pass){
+        $password = $pass;
+        $user = array();
+            $stmt = $this->runQuery("SELECT `meter` FROM details WHERE phone =:phone AND password =:pass");
+            $stmt->execute(array(":phone"=>$phone,":pass"=>$pass));
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+     return $user;
+    }
+    public function getLiveReading($meterno){
+        
+        $stmt = $this->runQuery("SELECT reading from meterReading WHERE meter = :meterno ORDER BY time DESC LIMIT 1");
+        $stmt->execute(array(":meterno"=>$meterno));
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $currentReading = $user['reading'];
+        
+        echo $currentReading;
+        // $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                //  return $user;
+    }
+    public function calculateTariff()
+    {
+        /*
+            get from date and to date
+            calculate units
+            calculate rate
+        */
+    }
+
+    public function __destruct(){
+        mysqli_close($this->conn);
+    }
+}
+
+//update.php
+<?php
+
+require_once "operations.php";
+$date = new DateTime();
+$ob = new USER();
+
+$meterNo = $_POST['meterno'];
+$ts = $_POST['ts'];
+
+
+$ob->updateReading($ts,$meterNo);
+
+?>
+
+
+/*Mobile APP Code*/
+
+//login.js
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+import React, { Component } from 'react';
+import {
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+  StatusBar,
+  TextInput,
+  TouchableHighlight,
+  Alert
+} from 'react-native';
+
+const instructions = Platform.select({
+  ios: 'Press Cmd+R to reload,\n' +
+    'Cmd+D or shake for dev menu',
+  android: 'Double tap R on your keyboard to reload,\n' +
+    'Shake or press menu button for dev menu',
+});
+
+export default class Login extends Component {
+    componentWillMount() {
+ }
+    constructor(props){
+        super(props);
+        this.state = {
+            loginText:'',
+            passwordText:''
+        }
+
+    }
+
+    loginButtonPressed = () => {
+        this.props.navigation.navigate("Home1");
+    }
+
+  render() {
+    return (
+      <View style={styles.container}>
+        <StatusBar
+          barStyle="light-content"
+          backgroundColor="#CCCCCC"
+        />
+        <View style={styles.b1}>
+            <View style={styles.b1b1}>
+            <Text style={styles.topText}>Smart Pocket Meter</Text>
+            </View>
+            <View style={styles.b1b2}>
+                <View style={styles.b1b2b}>
+                    <Text style={styles.otherText}>Unique service number</Text>
+                    <View style={styles.b1b2bb}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: 2438988"
+                          onChangeText={(text) => this.setState({loginText:text})}
+                          value={this.state.loginText}
+                        />
+                    </View>
+                </View>
+                <View style={styles.b1b2b}>
+                    <Text style={styles.otherText}>Password</Text>
+                    <View style={styles.b1b2bb}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: helloduck"
+                          onChangeText={(text) => this.setState({passwordText:text})}
+                          value={this.state.passwordText}
+                          secureTextEntry={true}
+                        />
+                    </View>
+                </View>
+                <View style={styles.b1b2b}>
+                    <TouchableHighlight onPress = {this.loginButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                        <Text style={styles.otherText}>Login</Text>
+                    </TouchableHighlight>
+                </View>
+            </View>
+        </View>
+        <View style={styles.b2}>
+            <View style={styles.b2b}>
+                <TouchableHighlight onPress = {() => this.props.navigation.navigate("Register1")} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <Text style={styles.otherText}>Register</Text>
+                </TouchableHighlight>
+
+            </View>
+            <View style={styles.b2b}>
+                <TouchableHighlight onPress = {() => this.props.navigation.navigate("Forgot")} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <Text style={styles.otherText}>Forgot your password?</Text>
+                </TouchableHighlight>
+            </View>
+        </View>
+      </View>
+    );
+  }
+}
+
+const styles = StyleSheet.create({
+  container: {
+    paddingTop:Platform.OS=="ios"?22:0,
+    flex: 1,
+    backgroundColor: '#CCCCCC',
+    },
+    b1:{
+        flex:2,
+        // backgroundColor:"brown",
+        margin:4
+    },
+    b1b1:{
+        flex:1,
+        // backgroundColor:"aquamarine",
+        margin:4,
+        alignItems:"center",
+        justifyContent:"center"
+    },
+    b1b2:{
+        flex:2,
+        // backgroundColor:"aquamarine",
+        margin:4,
+        alignItems:"center"
+    },
+    topText:{
+        fontSize:26,
+        color:"#274690",
+    },
+    b1b2b:{
+        margin:4,
+        flex:1,
+        // backgroundColor:"brown",
+    },
+    otherText:{
+        fontSize:15,
+        color:"#000000"
+    },
+    b1b2bb:{
+        height:43,
+        width:300,
+        backgroundColor:"white",
+        borderWidth:1,
+        paddingLeft:5,
+        marginTop:1
+    },
+    b2:{
+        flex:1,
+        // backgroundColor:"brown",
+        margin:4,
+        justifyContent:"flex-end",
+        alignItems:'center'
+    },
+    b2b:{
+        height:40,
+        margin:4,
+        // backgroundColor:"aquamarine"
+    }
+
+});
+
+//home.js
+
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+
+ import React, { Component } from 'react';
+ import {
+   Platform,
+   StyleSheet,
+   Text,
+   View,
+   StatusBar,
+   TextInput,
+   TouchableHighlight,
+   Alert,
+   AsyncStorage
+ } from 'react-native';
+ export default class Home extends Component {
+     constructor(props){
+         super(props);
+         this.state = {
+             reading:"45777.32",
+             date:"",
+             sr:''
+         };
+
+        this.getData();
+
+         // this.getStoredData("@SavedReadingDate").then((goals) => {Alert.alert(goals)});
+         // this.getStoredData("@SavedReadingValue").then((goals) => {Alert.alert(goals)});
+     }
+
+     getData = () => {
+         AsyncStorage.getItem("@SavedReadingDate").then((value) => this.setState({date:value}));
+         AsyncStorage.getItem("@SavedReadingValue").then((value) => this.setState({sr:value}));
+     }
+     saveData = async (date,reading) => {
+            AsyncStorage.setItem('@SavedReadingDate',date).then(()=>this.getData());
+            AsyncStorage.setItem('@SavedReadingValue',reading).then(()=>this.getData());
+        };
+
+     saveButtonPressed = () => {
+         var today = new Date();
+         date=(today.getDate()<10?("0"+today.getDate()):today.getDate()) + "/"+ (parseInt(today.getMonth()+1)<10?("0"+parseInt(today.getMonth()+1)):parseInt(today.getMonth()+1)) +"/"+ today.getFullYear().toString().substr(-2);
+         time=`${today.getHours()<10?("0"+today.getHours()):today.getHours()}:${today.getMinutes()<10?("0"+today.getMinutes()):today.getMinutes()}`;
+         fullDate =date +" "+ time;
+
+         this.saveData(fullDate,this.state.reading);
+     }
+
+     billButtonPressed = () => {
+         Alert.alert("bill pressed");
+     }
+
+     statisticsButtonPressed = () => {
+         Alert.alert("statistics pressed");
+     }
+
+
+
+   render() {
+     return (
+       <View style={styles.container}>
+            <View style={[styles.b1,{marginTop:30}]}>
+                    <ReadingBox read = {this.state.reading}/>
+            </View>
+            <View style={styles.b1}>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Last save on</Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: {this.state.date}</Text></View>
+            </View>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Reading </Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: {this.state.sr}</Text></View>
+            </View>
+            <View style={styles.infoBox}>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>Units</Text></View>
+                <View style={styles.infoBoxInside}><Text style={styles.infoText}>: 83.16</Text></View>
+            </View>
+            </View>
+            <View style={[styles.b1,{alignItems:'center'}]}>
+                <TouchableHighlight onPress = {this.saveButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <View style={styles.button}>
+                    <Text style={styles.buttonText}>Save</Text>
+                    </View>
+                </TouchableHighlight>
+            </View>
+            <View style={[styles.b1,{justifyContent:'space-between',flexDirection:'row',}]}>
+            <TouchableHighlight onPress = {this.billButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                <View style={styles.button}>
+                    <Text style={styles.buttonText}>Approx bill</Text>
+                </View>
+            </TouchableHighlight>
+            <TouchableHighlight onPress = {this.statisticsButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                <View style={styles.button}>
+                    <Text style={styles.buttonText}>Statistics</Text>
+                </View>
+            </TouchableHighlight>
+            </View>
+       </View>
+     );
+   }
+ }
+// const InfoBox = (props) => {
+//     return(
+//       <View>
+//
+//       </View>
+//     );
+// }
+
+const ReadingBox = (props) => {
+    return(
+      <View>
+          <Text style={styles.liveText}>Live</Text>
+          <View style={styles.liveReading}>
+              <Text style={styles.liveReadingNumber}>{props.read}</Text>
+              <Text style={styles.liveReadingKWH}>kwh</Text>
+          </View>
+      </View>
+    );
+}
+
+ const styles = StyleSheet.create({
+     container: {
+         paddingTop:Platform.OS=="ios"?22:0,
+         flex: 1,
+         backgroundColor: '#CCCCCC',
+     },
+     b1:{
+        // backgroundColor: 'red',
+        marginLeft:20,
+        marginRight:20,
+        marginTop:4,
+        marginBottom:4,
+        minHeight:40,
+     },
+     liveReading:{
+         height:100,
+         backgroundColor:'white',
+         borderWidth:2,
+         borderRadius:25,
+         borderColor:'#707070',
+         alignItems:'center',
+         justifyContent:'center',
+     },
+     liveText:{
+         fontSize:25,
+         color:'#5D5360',
+     },
+     liveReadingKWH:{
+         fontSize:22,
+         color:'#5D5360',
+         position:'absolute',
+         right:4,
+         top:40
+     },
+     liveReadingNumber:{
+         fontSize:35,
+         color:'#5D5360',
+     },
+     infoBox:{
+         minHeight:30,
+         margin:3,
+         flexDirection:'row',
+         // justifyContent:'space-between'
+     },
+     infoText:{
+         color:'#000000',
+         fontSize:18
+     },
+     infoBoxInside:{
+         margin:2,
+         flex:1
+     },
+     button:{
+         backgroundColor:'#68B0AB',
+         borderWidth:0.5,
+         borderColor:"black",
+         // width:60,
+         height:40,
+         borderRadius:15,
+         alignItems:'center',
+         justifyContent:'center'
+
+     },
+     buttonText:{
+         color:'white',
+         fontSize:18,
+         margin:5
+     }
+
+ });
+
+//regView1.js
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+
+ import React, { Component } from 'react';
+ import {
+   Platform,
+   StyleSheet,
+   Text,
+   View,
+   StatusBar,
+   TextInput,
+   TouchableHighlight,
+   Alert
+ } from 'react-native';
+
+ export default class RegView1 extends Component {
+     constructor(props){
+         super(props);
+         this.state = {
+             usnText:'',
+             passText:'',
+             rePassText:''
+         }
+
+     }
+     requestButtonPressed = () => {
+         if((this.state.usnText != "") && (this.state.passText != "") && (this.state.rePassText != "")){
+             if(this.state.passText != this.state.rePassText)
+                {
+                    Alert.alert(
+                      'Enter same passwords',
+                      '',
+                      [
+                        {text: 'Ok'},
+                      {cancelable: false},
+                  ]
+                    );
+                    this.setState({passText:'' , rePassText:''})
+                }
+                else {
+                    Alert.alert(
+                      'OTP sent',
+                      'Please check your registered mobile number',
+                      [
+                        {text: 'Ok', onPress: () => this.props.navigation.navigate("Register2")},
+                      {cancelable: false},
+                  ]
+                    );
+                }
+         } else {
+             Alert.alert(
+               'Enter all details',
+               '',
+               [
+                 {text: 'Ok'},
+               {cancelable: false},
+           ]
+             );
+         }
+
+     }
+   render() {
+     return (
+       <View style={styles.container}>
+             <View style={styles.b1}></View>
+             <View style={styles.b2}>
+                 <View style={styles.b2b1}>
+                    <Text style={styles.t1}>Enter Unique service number</Text>
+                    <View style={styles.b2b1b1}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: 2438988"
+                          onChangeText={(text) => this.setState({usnText:text})}
+                          value={this.state.usnText}
+                        /></View>
+                 </View>
+                 <View style={styles.b2b1}>
+                    <Text style={styles.t1}>Enter password</Text>
+                    <View style={styles.b2b1b1}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: helloduck"
+                          onChangeText={(text) => this.setState({passText:text})}
+                          value={this.state.passText}
+                          secureTextEntry = {true}
+                        />
+                    </View>
+                 </View>
+                 <View style={styles.b2b1}>
+                    <Text style={styles.t1}>Re-Type password</Text>
+                    <View style={styles.b2b1b1}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: helloduck"
+                          onChangeText={(text) => this.setState({rePassText:text})}
+                          value={this.state.rePassText}
+                          secureTextEntry = {true}
+                        />
+                    </View>
+                 </View>
+                 <View style={styles.b2b1}>
+                     <TouchableHighlight onPress = {this.requestButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                        <Text style={[styles.t1,{color:"#3D348B"}]}>Request OTP</Text>
+                     </TouchableHighlight>
+                 </View>
+             </View>
+             <View style={styles.b1}></View>
+       </View>
+     );
+   }
+ }
+
+ const styles = StyleSheet.create({
+   container: {
+       paddingTop:Platform.OS=="ios"?22:0,
+       flex: 1,
+       backgroundColor: '#CCCCCC',
+   },
+   b1:{
+       flex:1,
+       margin:3
+   },
+   b2:{
+       flex:4,
+       margin:3,
+   },
+   b2b1:{
+       margin:3,
+       alignItems:'center',
+       paddingTop:5
+
+   },
+   t1:{
+       fontSize:17,
+       color:"black"
+   },
+   b2b1b1:{
+       height:43,
+       width:300,
+       backgroundColor:"white",
+       borderWidth:1,
+       paddingLeft:5,
+       marginTop:3,
+   }
+ });
+
+//regView2.js
+
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+
+ import React, { Component } from 'react';
+ import {
+   Platform,
+   StyleSheet,
+   Text,
+   View,
+   StatusBar,
+   TextInput,
+   TouchableHighlight,
+   Alert
+ } from 'react-native';
+
+ export default class RegView2 extends Component {
+     constructor(props){
+         super(props);
+         this.state = {
+             otpText:''
+         }
+
+     }
+     continueButtonPressed = () => {
+         Alert.alert(
+           'Successful!',
+           'Login to Continue',
+           [
+             {text: 'Ok', onPress: () => this.props.navigation.popToTop()},
+           {cancelable: false},
+        ]
+         );     }
+   render() {
+     return (
+       <View style={styles.container}>
+         <View style={styles.b1}></View>
+         <View style={styles.b2}>
+            <View style={styles.b2b1}>
+                <Text style={styles.t1}>Enter the OTP</Text>
+                <View style={styles.b2b1b1}>
+                    <TextInput
+                      style={{height: 43}}
+                      placeholder="eg: 347822"
+                      onChangeText={(text) => this.setState({otpText:text})}
+                      value={this.state.otpText}
+                    />
+                </View>
+                <TouchableHighlight onPress = {this.continueButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                    <Text style={styles.t1}>Continue</Text>
+                </TouchableHighlight>
+            </View>
+         </View>
+         <View style={styles.b1}></View>
+       </View>
+     );
+   }
+ }
+
+ const styles = StyleSheet.create({
+   container: {
+       paddingTop:Platform.OS=="ios"?22:0,
+       flex: 1,
+       backgroundColor: '#CCCCCC',
+   },
+   b1:{
+       flex:1,
+       // backgroundColor:"red",
+       margin:3
+   },
+   b2:{
+       flex:4,
+       // backgroundColor:"red",
+       margin:3
+   },
+   b2b1:{
+       margin:3,
+       alignItems:'center',
+       paddingTop:5,
+       // backgroundColor:"blue",
+
+   },
+   t1:{
+       fontSize:17,
+       color:"black",
+   },
+   b2b1b1:{
+       height:43,
+       width:300,
+       backgroundColor:"white",
+       borderWidth:1,
+       paddingLeft:5,
+       marginTop:3,
+       marginBottom:20
+   }
+ });
+
+
+//Navigation.js
+
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+import Login from './login.js';
+import RegView1 from './regView1.js';
+import RegView2 from './regView2.js';
+import Home from './home.js';
+import Forgot from './forgot.js';
+import React , {Component} from "react";
+import { View, Text ,Button , Platform ,Image} from "react-native";
+import { createStackNavigator, createAppContainer } from "react-navigation";
+
+class LoginScreen extends Component {
+    static navigationOptions = {
+}
+    segueToRegister = () => {
+        // this.props.navigation.navigate("Register1");
+        Alert.alert("BEEYAACH");
+
+    }
+    render(){
+        return (<Login navigation = {this.props.navigation}/>);
+    }
+}
+
+class RegisterScreen1 extends Component {
+    render(){
+        return (<RegView1 navigation = {this.props.navigation}/>);
+    }
+}
+
+class ForgotPassScreen extends Component {
+    render(){
+        return (<Forgot navigation = {this.props.navigation}/>);
+    }
+}
+
+class RegisterScreen2 extends Component {
+    static navigationOptions = {
+       headerLeft: null,
+       gesturesEnabled: false,
+}
+    render(){
+        return (<RegView2 navigation = {this.props.navigation}/>);
+    }
+}
+
+class HomeScreen1 extends Component {
+    static navigationOptions = ({navigation}) => {
+        return {
+            title: 'Home',
+            headerLeft:null,
+            headerRight: (
+              <Button
+                onPress={() => navigation.goBack()}
+                title="Log out"
+                color={Platform.OS=="ios"?"#FFFFFF":"#274690"}
+              />
+            ),
+        };
+
+};
+
+
+  render() {
+    return (<Home navigation = {this.props.navigation}/>);
+  }
+
+}
+
+
+
+
+const AppNavigator = createStackNavigator(
+    {
+        Login : LoginScreen,
+        Register1 : RegisterScreen1,
+        Register2 : RegisterScreen2,
+        Home1:HomeScreen1,
+        Forgot:ForgotPassScreen
+    },
+    {
+        initialRouteName : "Login",
+        defaultNavigationOptions:{
+            headerStyle: {
+              backgroundColor: '#274690',
+            },
+        }
+    }
+)
+
+const AppContainer = createAppContainer(AppNavigator);
+export default class SPM extends Component {
+  render() {
+    return <AppContainer />;
+  }
+}
+
+//forgot.js
+
+/**
+ * Sample React Native App
+ * https://github.com/facebook/react-native
+ *
+ * @format
+ * @flow
+ * @lint-ignore-every XPLATJSCOPYRIGHT1
+ */
+
+ import React, { Component } from 'react';
+ import {
+   Platform,
+   StyleSheet,
+   Text,
+   View,
+   StatusBar,
+   TextInput,
+   TouchableHighlight,
+   Alert
+ } from 'react-native';
+
+ export default class Forgot extends Component {
+     constructor(props){
+         super(props);
+         this.state = {
+             usnText:'',
+             rmnText:'',
+         }
+
+     }
+     requestButtonPressed = () => {
+         if((this.state.usnText != "") && (this.state.rmnText != "")){
+                    Alert.alert(
+                      '',
+                      'Link to reset password has been sent to your registered mobile number',
+                      [
+                        {text: 'Ok'},
+                      {cancelable: false},
+                  ]
+                    );
+         } else {
+             Alert.alert(
+               'Enter all details',
+               '',
+               [
+                 {text: 'Ok'},
+               {cancelable: false},
+           ]
+             );
+         }
+
+     }
+   render() {
+     return (
+       <View style={styles.container}>
+             <View style={styles.b1}></View>
+             <View style={styles.b2}>
+                 <View style={styles.b2b1}>
+                    <Text style={styles.t1}>Enter Unique service number</Text>
+                    <View style={styles.b2b1b1}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: 2438988"
+                          onChangeText={(text) => this.setState({usnText:text})}
+                          value={this.state.usnText}
+                        /></View>
+                 </View>
+                 <View style={styles.b2b1}>
+                    <Text style={styles.t1}>Enter registered mobile no.</Text>
+                    <View style={styles.b2b1b1}>
+                        <TextInput
+                          style={{height: 43}}
+                          placeholder="eg: 9246843643"
+                          onChangeText={(text) => this.setState({rmnText:text})}
+                          value={this.state.rmnText}
+                        />
+                    </View>
+                 </View>
+
+                 <View style={styles.b2b1}>
+                     <TouchableHighlight onPress = {this.requestButtonPressed} underlayColor={"#CCCCCC"} activeOpacity={0.5}>
+                        <Text style={[styles.t1,{color:"#3D348B"}]}>Submit</Text>
+                     </TouchableHighlight>
+                 </View>
+             </View>
+             <View style={styles.b1}></View>
+       </View>
+     );
+   }
+ }
+
+ const styles = StyleSheet.create({
+   container: {
+       paddingTop:Platform.OS=="ios"?22:0,
+       flex: 1,
+       backgroundColor: '#CCCCCC',
+   },
+   b1:{
+       flex:1,
+       margin:3
+   },
+   b2:{
+       flex:4,
+       margin:3,
+   },
+   b2b1:{
+       margin:3,
+       alignItems:'center',
+       paddingTop:5
+
+   },
+   t1:{
+       fontSize:17,
+       color:"black"
+   },
+   b2b1b1:{
+       height:43,
+       width:300,
+       backgroundColor:"white",
+       borderWidth:1,
+       paddingLeft:5,
+       marginTop:3,
+   }
+ });
